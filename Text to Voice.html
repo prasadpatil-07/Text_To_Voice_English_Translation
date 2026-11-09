@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Text to Voice</title>
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  --bg:#f5f6fa;--card:#fff;--text:#161a2b;--muted:#6b7190;--accent:#4f46e5;--accent-text:#fff;--border:#dcdfee;--hl:#e8e6ff;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){--bg:#10172a;--card:#1a2340;--text:#eef0fa;--muted:#9aa2c4;--accent:#7c83ff;--accent-text:#10172a;--border:#2b3560;--hl:#2a3466;color-scheme:dark}
+}
+:root[data-theme="dark"]{--bg:#10172a;--card:#1a2340;--text:#eef0fa;--muted:#9aa2c4;--accent:#7c83ff;--accent-text:#10172a;--border:#2b3560;--hl:#2a3466;color-scheme:dark}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
+main{max-width:560px;margin:0 auto;padding:20px 16px 32px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:1.3rem;margin:4px 0 0}
+textarea{width:100%;min-height:160px;resize:vertical;padding:14px;border:1px solid var(--border);border-radius:14px;background:var(--card);color:var(--text);font:inherit}
+textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
+.now{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;min-height:84px}
+.now small{color:var(--muted);display:block;margin-bottom:6px}
+.now span{background:var(--hl);border-radius:6px;padding:2px 4px}
+.controls{display:flex;justify-content:center;align-items:center;gap:18px}
+.controls button{width:64px;height:64px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:24px;cursor:pointer;display:grid;place-items:center;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.controls button.main{width:84px;height:84px;background:var(--accent);color:var(--accent-text);border:none;font-size:32px}
+.controls button:active{transform:scale(.95)}
+.controls button:disabled{opacity:.4}
+.note{color:var(--muted);font-size:.85rem;text-align:center;min-height:1.2em}
+.speed{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px 14px}
+.speed label{color:var(--muted);font-size:.9rem;white-space:nowrap}
+.speed input{flex:1;min-width:0;accent-color:var(--accent);height:32px;touch-action:manipulation}
+.speed output{min-width:3.2em;text-align:right;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<main>
+  <h1>Text to Voice</h1>
+  <textarea id="text" placeholder="Paste or type your text here…" aria-label="Text to read"></textarea>
+  <div class="now" aria-live="polite"><small id="count">Sentence 0 of 0</small><div id="current">Press play to start.</div></div>
+  <div class="controls">
+    <button id="prev" aria-label="Previous sentence">&#9664;&#9664;</button>
+    <button id="play" class="main" aria-label="Play">&#9654;</button>
+    <button id="next" aria-label="Next sentence">&#9654;&#9654;</button>
+  </div>
+  <div class="speed">
+    <label for="speed">Speed</label>
+    <input type="range" id="speed" min="0.5" max="1.5" step="0.05" value="0.95" aria-label="Voice speed">
+    <output id="speedVal" for="speed">0.95x</output>
+  </div>
+  <div class="note" id="note"></div>
+</main>
+<script>
+(function(){
+  var synth = window.speechSynthesis;
+  var $ = function(id){return document.getElementById(id)};
+  var textEl=$("text"), curEl=$("current"), countEl=$("count"), playBtn=$("play"), prevBtn=$("prev"), nextBtn=$("next"), noteEl=$("note");
+  var sentences=[], idx=0, playing=false, gen=0, voice=null, indian=false, rate=0.95;
+
+  if(!synth){
+    noteEl.textContent="Sorry, this browser doesn’t support text to speech.";
+    [playBtn,prevBtn,nextBtn].forEach(function(b){b.disabled=true});
+    return;
+  }
+
+  function pickVoice(){
+    var v=synth.getVoices()||[];
+    var lang=function(x){return (x.lang||"").replace("_","-").toLowerCase()};
+    voice=v.find(function(x){return lang(x)==="en-in"})||
+          v.find(function(x){return /india|heera|ravi|neerja|prabhat/i.test(x.name||"")})||
+          v.find(function(x){return lang(x)==="hi-in"})||
+          v.find(function(x){return lang(x).indexOf("en")===0})||null;
+    indian=!!voice&&(lang(voice)==="en-in"||lang(voice)==="hi-in"||/india|heera|ravi|neerja|prabhat/i.test(voice.name||""));
+  }
+  pickVoice();
+  if(synth.onvoiceschanged!==undefined) synth.onvoiceschanged=pickVoice;
+
+  function parse(){
+    var t=textEl.value.replace(/\s+/g," ").trim();
+    sentences=t?(t.match(/[^.!?।]+[.!?।]*/g)||[]).map(function(s){return s.trim()}).filter(Boolean):[];
+    // split very long sentences so mobile engines don’t cut them off
+    var out=[];
+    sentences.forEach(function(s){
+      while(s.length>220){
+        var cut=s.lastIndexOf(",",220); if(cut<60) cut=s.lastIndexOf(" ",220); if(cut<1) cut=220;
+        out.push(s.slice(0,cut+1).trim()); s=s.slice(cut+1).trim();
+      }
+      if(s) out.push(s);
+    });
+    sentences=out;
+  }
+
+  function render(){
+    if(!sentences.length){curEl.textContent="Press play to start.";countEl.textContent="Sentence 0 of 0";}
+    else{
+      countEl.textContent="Sentence "+(idx+1)+" of "+sentences.length;
+      curEl.innerHTML="";
+      var sp=document.createElement("span"); sp.textContent=sentences[idx]; curEl.appendChild(sp);
+    }
+    playBtn.innerHTML=playing?"&#10074;&#10074;":"&#9654;";
+    playBtn.setAttribute("aria-label",playing?"Pause":"Play");
+    prevBtn.disabled=!sentences.length||idx===0;
+    nextBtn.disabled=!sentences.length||idx>=sentences.length-1;
+  }
+
+  function stopSpeech(){gen++;synth.cancel();}
+
+  function speakCurrent(){
+    stopSpeech();
+    var g=gen;
+    setTimeout(function(){
+      if(g!==gen||!playing) return;
+      var u=new SpeechSynthesisUtterance(sentences[idx]);
+      u.lang=(voice&&voice.lang)||"en-IN";
+      if(voice) u.voice=voice;
+      u.rate=rate;
+      u.onend=function(){
+        if(g!==gen||!playing) return;
+        if(idx<sentences.length-1){idx++;render();speakCurrent();}
+        else{playing=false;idx=0;render();}
+      };
+      u.onerror=function(e){
+        if(g!==gen) return;
+        if(e&&(e.error==="canceled"||e.error==="interrupted")) return;
+        playing=false;render();noteEl.textContent="Couldn’t play audio. Check your volume and try again.";
+      };
+      synth.speak(u);
+    },80);
+  }
+
+  function play(){
+    if(!sentences.length){parse();idx=0;}
+    if(!sentences.length){noteEl.textContent="Please enter some text first.";return;}
+    pickVoice();
+    noteEl.textContent=indian?"":"No Indian voice found on this device. Install “English (India)” in your phone’s text-to-speech settings.";
+    if(idx>=sentences.length) idx=0;
+    playing=true;render();speakCurrent();
+  }
+  function pause(){playing=false;stopSpeech();render();}
+
+  playBtn.addEventListener("click",function(){playing?pause():play();});
+  prevBtn.addEventListener("click",function(){
+    if(!sentences.length) return;
+    idx=Math.max(0,idx-1);render();
+    if(playing) speakCurrent();
+  });
+  nextBtn.addEventListener("click",function(){
+    if(!sentences.length) return;
+    idx=Math.min(sentences.length-1,idx+1);render();
+    if(playing) speakCurrent();
+  });
+  textEl.addEventListener("input",function(){
+    stopSpeech();playing=false;sentences=[];idx=0;render();
+  });
+  var speedEl=$("speed"), speedVal=$("speedVal");
+  try{var saved=parseFloat(localStorage.getItem("ttsRate"));if(saved>=0.5&&saved<=1.5) rate=saved;}catch(e){}
+  speedEl.value=rate;speedVal.textContent=rate.toFixed(2)+"x";
+  speedEl.addEventListener("input",function(){
+    rate=parseFloat(speedEl.value);speedVal.textContent=rate.toFixed(2)+"x";
+  });
+  speedEl.addEventListener("change",function(){
+    try{localStorage.setItem("ttsRate",String(rate));}catch(e){}
+    if(playing) speakCurrent();
+  });
+  window.addEventListener("pagehide",function(){stopSpeech();});
+  render();
+})();
+</script>
+</body>
+</html>
